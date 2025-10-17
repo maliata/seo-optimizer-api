@@ -112,16 +112,21 @@ The application uses environment variables for configuration. Copy `.env.example
 - `GET /api/v1/readiness` - Kubernetes readiness probe
 - `GET /api/v1/liveness` - Kubernetes liveness probe
 
-### SEO Optimization (Coming in Phase 2)
+### SEO Optimization
 
 - `POST /api/v1/optimize-title` - Generate SEO-optimized titles and descriptions
+- `GET /api/v1/strategies` - List available optimization strategies
 
 ## Development
 
 ### Running Tests
 
 ```bash
-pytest app/tests/
+# Run all tests
+pytest -q app/tests
+
+# Skip integration tests (require real AI keys)
+pytest -q -m "not integration" app/tests
 ```
 
 ### Code Formatting

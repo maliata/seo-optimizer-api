@@ -294,3 +294,79 @@ class TestAIServiceIntegration:
 if __name__ == "__main__":
     # Run basic tests
     pytest.main([__file__, "-v"])
+# Phase 5: SEO Analysis and Validation Tests
+
+import pytest
+from app.models.schemas import TitleSuggestion, CharacterCounts, OptimizationStrategy
+from app.routers.optimization import _calculate_seo_analysis
+
+
+def _mk_suggestion(title: str, description: str, strategy=OptimizationStrategy.KEYWORD_FOCUSED, score: float = 80.0):
+    return TitleSuggestion(
+        title=title,
+        description=description,
+        strategy=strategy,
+        seo_score=score,
+        character_counts=CharacterCounts(
+            title=len(title),
+            description=len(description)
+        ),
+        keywords_used=[],
+        optimization_notes=f"Test suggestion ({strategy.value})"
+    )
+
+
+def test_keyword_position_scoring_early():
+    title = "Wireless Headphones - Premium Sound"
+    description = "Experience premium sound quality with advanced features."
+    suggestion = _mk_suggestion(title, description)
+    analysis = _calculate_seo_analysis(
+        original_title="Headphones",
+        suggestions=[suggestion],
+        keywords=["wireless"]
+    )
+    assert analysis.keyword_position_score is not None
+    assert analysis.keyword_position_score >= 8.0  # early placement should score high
+
+
+def test_penalties_all_caps_and_spam():
+    title = "FREE!!! BUY NOW"
+    description = "Limited time 100% cheap deal for everyone."
+    suggestion = _mk_suggestion(title, description)
+    analysis = _calculate_seo_analysis(
+        original_title="Premium Product",
+        suggestions=[suggestion],
+        keywords=["headphones"]
+    )
+    assert analysis.penalties is not None
+    assert "all_caps_title" in analysis.penalties
+    # At least one spam pattern detected
+    spam_hits = [k for k in analysis.penalties.keys() if k.startswith("spam:")]
+    assert len(spam_hits) >= 1
+    # Missing keywords penalty expected because keyword not present
+    assert "missing_keywords" in analysis.penalties
+
+
+def test_length_scoring_improves_over_original():
+    original_title = "X"
+    title = "Premium Wireless Bluetooth Headphones with Noise Cancellation"
+    description = "Enjoy immersive audio with long battery life, comfort fit, and quick charge for everyday use."
+    suggestion = _mk_suggestion(title, description, score=75.0)
+    analysis = _calculate_seo_analysis(
+        original_title=original_title,
+        suggestions=[suggestion],
+        keywords=["wireless", "bluetooth"]
+    )
+    assert analysis.best_suggestion_score >= analysis.original_score
+
+
+def test_readability_score_bounds():
+    title = "High performance gadget for professionals"
+    description = "Engineered for reliability and performance. Suitable for daily use with consistent results."
+    suggestion = _mk_suggestion(title, description)
+    analysis = _calculate_seo_analysis(
+        original_title="Gadget",
+        suggestions=[suggestion],
+        keywords=[]
+    )
+    assert 0.0 <= analysis.readability_score <= 100.0
