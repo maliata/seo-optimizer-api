@@ -5,7 +5,7 @@ This module defines all the input and output schemas for the API endpoints,
 including validation rules and documentation.
 """
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 from enum import Enum
 
@@ -32,8 +32,8 @@ class ProductInput(BaseModel):
     
     features: List[str] = Field(
         ...,
-        min_items=1,
-        max_items=20,
+        min_length=1,
+        max_length=20,
         description="List of product features",
         example=["Noise cancellation", "30-hour battery", "Quick charge"]
     )
@@ -69,12 +69,12 @@ class ProductInput(BaseModel):
     
     keywords: Optional[List[str]] = Field(
         None,
-        max_items=15,
+        max_length=15,
         description="Target keywords for SEO",
         example=["wireless headphones", "bluetooth", "noise cancelling"]
     )
     
-    @validator('features')
+    @field_validator('features')
     def validate_features(cls, v):
         """Validate features list."""
         if not v:
@@ -87,7 +87,7 @@ class ProductInput(BaseModel):
         
         return features
     
-    @validator('keywords')
+    @field_validator('keywords')
     def validate_keywords(cls, v):
         """Validate keywords list."""
         if v is None:
@@ -103,8 +103,8 @@ class OptimizationConfig(BaseModel):
     
     strategies: List[OptimizationStrategy] = Field(
         default=[OptimizationStrategy.KEYWORD_FOCUSED],
-        min_items=1,
-        max_items=5,
+        min_length=1,
+        max_length=5,
         description="Optimization strategies to apply",
         example=["keyword_focused", "benefit_driven"]
     )
@@ -302,7 +302,7 @@ class OptimizationResponse(BaseModel):
     
     suggestions: List[TitleSuggestion] = Field(
         ...,
-        min_items=1,
+        min_length=1,
         description="List of optimization suggestions"
     )
     

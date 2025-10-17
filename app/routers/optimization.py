@@ -20,9 +20,10 @@ from app.models import (
     CharacterCounts,
     OptimizationStrategy
 )
-from app.services import get_product_processor
+from app.services import get_product_processor, get_ai_service
 from app.config import get_settings
 from app.utils.logging import get_logger
+from app.utils.exceptions import AIServiceError, ContentGenerationError
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -58,7 +59,8 @@ async def optimize_title(
     request: OptimizationRequest,
     http_request: Request,
     settings = Depends(get_settings),
-    product_processor = Depends(get_product_processor)
+    product_processor = Depends(get_product_processor),
+    ai_service = Depends(get_ai_service)
 ) -> OptimizationResponse:
     """
     Optimize product title and description for SEO.
@@ -94,12 +96,25 @@ async def optimize_title(
             request_id=request_id
         )
         
-        # For Phase 2, we'll create mock suggestions since AI integration comes in Phase 3
-        suggestions = await _generate_mock_suggestions(
-            processing_context,
-            request.optimization_config,
-            request_id
-        )
+        # Generate AI-powered suggestions
+        try:
+            suggestions = await ai_service.generate_suggestions(
+                product=processing_context.product_data,
+                config=request.optimization_config,
+                request_id=request_id
+            )
+        except (AIServiceError, ContentGenerationError) as e:
+            logger.warning(
+                "AI generation failed, falling back to mock suggestions",
+                request_id=request_id,
+                error=str(e)
+            )
+            # Fallback to mock suggestions if AI fails
+            suggestions = await _generate_mock_suggestions(
+                processing_context,
+                request.optimization_config,
+                request_id
+            )
         
         # Calculate SEO analysis
         seo_analysis = _calculate_seo_analysis(
@@ -143,6 +158,24 @@ async def optimize_title(
             detail={
                 "error": "VALIDATION_ERROR",
                 "message": str(e),
+                "request_id": request_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+        )
+    
+    except (AIServiceError, ContentGenerationError) as e:
+        logger.error(
+            "AI service error in optimization request",
+            request_id=request_id,
+            error=str(e),
+            error_type=type(e).__name__,
+            processing_time=time.time() - start_time
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "AI_SERVICE_ERROR",
+                "message": "AI content generation is temporarily unavailable. Please try again later.",
                 "request_id": request_id,
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }

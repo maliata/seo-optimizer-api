@@ -7,6 +7,7 @@ from datetime import datetime
 
 from app.config import get_settings
 from app.utils.logging import get_logger
+from app.services import get_cost_tracker
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -249,3 +250,67 @@ async def liveness_check():
         "alive": True,
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+@router.get("/costs")
+async def get_cost_summary(
+    cost_tracker = Depends(get_cost_tracker),
+    settings = Depends(get_settings)
+):
+    """
+    Get AI API cost summary and usage statistics.
+    
+    Returns cost and usage metrics for monitoring AI API consumption.
+    """
+    if not settings.enable_metrics:
+        return {"error": "Cost tracking is disabled"}
+    
+    try:
+        cost_summary = cost_tracker.get_cost_summary()
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "cost_summary": cost_summary
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get cost summary", error=str(e))
+        return {
+            "error": "Failed to retrieve cost summary",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+
+@router.get("/costs/recent-calls")
+async def get_recent_api_calls(
+    limit: int = 10,
+    cost_tracker = Depends(get_cost_tracker),
+    settings = Depends(get_settings)
+):
+    """
+    Get recent AI API calls for debugging and monitoring.
+    
+    Args:
+        limit: Maximum number of recent calls to return (default: 10, max: 50)
+    """
+    if not settings.enable_metrics:
+        return {"error": "Cost tracking is disabled"}
+    
+    # Limit the maximum number of calls that can be requested
+    limit = min(max(1, limit), 50)
+    
+    try:
+        recent_calls = cost_tracker.get_recent_calls(limit=limit)
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "recent_calls": recent_calls,
+            "total_calls_returned": len(recent_calls)
+        }
+        
+    except Exception as e:
+        logger.error("Failed to get recent API calls", error=str(e))
+        return {
+            "error": "Failed to retrieve recent API calls",
+            "timestamp": datetime.utcnow().isoformat()
+        }
