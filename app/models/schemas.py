@@ -282,6 +282,32 @@ class SEOAnalysis(BaseModel):
         example=78.5
     )
 
+    component_scores: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Detailed component scores contributing to SEO analysis",
+        example={"title_length": 22.0, "description_length": 24.0, "keyword_usage": 20.0, "readability": 8.0}
+    )
+
+    keyword_position_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=100.0,
+        description="Score based on position of primary keyword in title",
+        example=10.0
+    )
+
+    penalties: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Penalties applied due to rule violations",
+        example={"all_caps_title": -10.0}
+    )
+
+    notes: Optional[str] = Field(
+        default=None,
+        description="Human-readable rationale for scores and any repairs applied",
+        example="Primary keyword moved earlier in title; trimmed description to 160 chars."
+    )
+
 
 class OptimizationRequest(BaseModel):
     """Complete optimization request schema."""

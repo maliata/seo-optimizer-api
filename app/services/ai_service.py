@@ -10,6 +10,8 @@ import json
 import time
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+import re
+import textstat
 
 import litellm
 from litellm import completion, acompletion
@@ -411,12 +413,12 @@ class AIService:
                     # last resort fallback
                     description = product.current_title[:200]
             
-            # Ensure length limits
-            if len(title) > 100:
-                title = title[:97] + "..."
+            # Ensure length limits (Phase 4 strict limits)
+            if len(title) > 60:
+                title = title[:57] + "..."
             
-            if len(description) > 200:
-                description = description[:197] + "..."
+            if len(description) > 160:
+                description = description[:157] + "..."
             
             # Calculate character counts
             char_counts = CharacterCounts(
@@ -470,45 +472,94 @@ class AIService:
     ) -> float:
         """Calculate basic SEO score (enhanced version will be in Phase 4)."""
         
-        score = 0.0
-        
-        # Title length score (30 points)
-        title_len = len(title)
-        if 50 <= title_len <= 60:
-            score += 30
-        elif 40 <= title_len < 50 or 60 < title_len <= 70:
-            score += 20
+        # Advanced Phase 4 scoring (max 100)
+        total = 0.0
+
+        # 1) Title length (max 25)
+        title_len = len(title or "")
+        if 55 <= title_len <= 60:
+            title_len_score = 25.0
+        elif 50 <= title_len < 55 or 60 < title_len <= 65:
+            title_len_score = 20.0
+        elif 40 <= title_len < 50 or 65 < title_len <= 70:
+            title_len_score = 12.0
         else:
-            score += 10
-        
-        # Description length score (25 points)
-        desc_len = len(description)
-        if 150 <= desc_len <= 160:
-            score += 25
-        elif 140 <= desc_len < 150 or 160 < desc_len <= 170:
-            score += 20
+            title_len_score = 6.0
+        total += title_len_score
+
+        # 2) Description length (max 20)
+        desc_len = len(description or "")
+        if 155 <= desc_len <= 160:
+            desc_len_score = 20.0
+        elif 150 <= desc_len < 155 or 160 < desc_len <= 170:
+            desc_len_score = 16.0
+        elif 140 <= desc_len < 150 or 170 < desc_len <= 180:
+            desc_len_score = 10.0
         else:
-            score += 10
-        
-        # Keyword usage score (35 points)
+            desc_len_score = 5.0
+        total += desc_len_score
+
+        # 3) Keyword usage coverage (max 25)
+        kw_score = 0.0
         if keywords_used:
-            keyword_score = min(len(keywords_used) * 10, 35)
-            score += keyword_score
-        
-        # Basic readability (10 points)
-        if title and description:
-            # Simple readability check
-            avg_word_length = (
-                sum(len(word) for word in title.split()) + 
-                sum(len(word) for word in description.split())
-            ) / (len(title.split()) + len(description.split()))
-            
-            if 4 <= avg_word_length <= 6:
-                score += 10
-            else:
-                score += 5
-        
-        return min(score, 100.0)
+            unique_kw = set([k.lower() for k in keywords_used if k])
+            # Reward up to 3 unique keywords
+            kw_score = min(len(unique_kw) * 8.5, 25.0)
+        total += kw_score
+
+        # 4) Readability using Flesch Reading Ease (max 10)
+        readability_component = 0.0
+        try:
+            # Use description for readability if available, otherwise title
+            text_for_readability = description if description else title
+            flesch = textstat.flesch_reading_ease(text_for_readability or "")
+            # Map 0..100 to 0..10 band (clamped)
+            readability_component = max(0.0, min(10.0, (flesch / 10.0)))
+        except Exception:
+            readability_component = 5.0  # neutral fallback
+        total += readability_component
+
+        # 5) Primary keyword early placement (max 10)
+        # If any keyword provided, check position of the first one found in title
+        keyword_pos_score = 0.0
+        normalized_title = (title or "").lower()
+        if keywords_used:
+            first_pos = None
+            for kw in keywords_used:
+                idx = normalized_title.find(kw.lower())
+                if idx != -1:
+                    first_pos = idx if first_pos is None else min(first_pos, idx)
+            if first_pos is not None:
+                if first_pos <= 15:
+                    keyword_pos_score = 10.0
+                elif first_pos <= 25:
+                    keyword_pos_score = 6.0
+                elif first_pos <= 35:
+                    keyword_pos_score = 3.0
+                else:
+                    keyword_pos_score = 1.0
+        total += keyword_pos_score
+
+        # 6) Penalties (caps, spammy tokens, missing keywords) - up to -20
+        penalties = 0.0
+        # All caps (excluding short words and brand acronyms is complex; simple heuristic)
+        if title and title.upper() == title and title_len >= 8:
+            penalties += 8.0
+        # Spammy punctuation or phrases
+        spam_patterns = [
+            r"!{2,}", r"\bfree\b", r"buy now", r"\b100%\b", r"cheap", r"limited time"
+        ]
+        combined_text = f"{title or ''} {description or ''}".lower()
+        for pat in spam_patterns:
+            if re.search(pat, combined_text):
+                penalties += 3.0
+        # Missing any keyword presence
+        if keywords_used:
+            if not any(kw.lower() in combined_text for kw in keywords_used):
+                penalties += 9.0
+
+        final_score = max(0.0, min(100.0, total - penalties))
+        return final_score
     
     def _load_prompt_templates(self) -> Dict[OptimizationStrategy, str]:
         """Load prompt templates for different optimization strategies."""

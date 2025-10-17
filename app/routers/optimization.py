@@ -10,6 +10,8 @@ from typing import Dict, Any
 import time
 from datetime import datetime
 import uuid
+import re
+import textstat
 
 from app.models import (
     OptimizationRequest,
@@ -335,30 +337,157 @@ def _calculate_seo_analysis(
     suggestions: list[TitleSuggestion],
     keywords: list[str]
 ) -> SEOAnalysis:
-    """Calculate SEO analysis for the optimization results."""
-    
-    # Mock original score calculation (will be properly implemented in Phase 4)
-    original_score = 45.0 + (len(original_title) * 0.5)  # Simple mock calculation
-    original_score = min(original_score, 100.0)
-    
-    # Get best suggestion score
-    best_score = max(s.seo_score for s in suggestions) if suggestions else original_score
-    
-    # Calculate improvement
-    improvement = ((best_score - original_score) / original_score) * 100 if original_score > 0 else 0
-    
-    # Mock keyword density analysis
-    keyword_density = {}
-    if keywords:
-        for keyword in keywords[:5]:  # Limit to top 5 keywords
-            keyword_density[keyword] = 0.15 + (hash(keyword) % 10) * 0.01  # Mock density
-    
+    """Calculate SEO analysis for the optimization results (Phase 4)."""
+
+    # Helper scoring components aligned with AIService advanced scoring
+    def _title_length_score(n: int) -> float:
+        if 55 <= n <= 60:
+            return 25.0
+        elif 50 <= n < 55 or 60 < n <= 65:
+            return 20.0
+        elif 40 <= n < 50 or 65 < n <= 70:
+            return 12.0
+        return 6.0
+
+    def _description_length_score(n: int) -> float:
+        if 155 <= n <= 160:
+            return 20.0
+        elif 150 <= n < 155 or 160 < n <= 170:
+            return 16.0
+        elif 140 <= n < 150 or 170 < n <= 180:
+            return 10.0
+        return 5.0
+
+    def _keyword_usage_score(used: list[str]) -> float:
+        uniq = set([k.lower() for k in used if k])
+        return min(len(uniq) * 8.5, 25.0)
+
+    def _readability_component(text: str) -> tuple[float, float]:
+        """
+        Returns (component_score_0_to_10, readability_0_to_100)
+        """
+        try:
+            flesch = textstat.flesch_reading_ease(text or "")
+            return max(0.0, min(10.0, (flesch / 10.0))), max(0.0, min(100.0, flesch))
+        except Exception:
+            return 5.0, 50.0
+
+    def _keyword_position_score(title: str, kw_list: list[str]) -> float:
+        pos_score = 0.0
+        if not title or not kw_list:
+            return pos_score
+        normalized = title.lower()
+        first_pos = None
+        for kw in kw_list:
+            idx = normalized.find(kw.lower())
+            if idx != -1:
+                first_pos = idx if first_pos is None else min(first_pos, idx)
+        if first_pos is not None:
+            if first_pos <= 15:
+                pos_score = 10.0
+            elif first_pos <= 25:
+                pos_score = 6.0
+            elif first_pos <= 35:
+                pos_score = 3.0
+            else:
+                pos_score = 1.0
+        return pos_score
+
+    def _penalties(title: str, description: str, kw_list: list[str]) -> tuple[float, Dict[str, float]]:
+        total = 0.0
+        details: Dict[str, float] = {}
+        tl = len(title or "")
+        # All caps penalty
+        if title and title.upper() == title and tl >= 8:
+            details["all_caps_title"] = -8.0
+            total += 8.0
+        # Spammy patterns
+        spam_patterns = [
+            r"!{2,}", r"\bfree\b", r"buy now", r"\b100%\b", r"cheap", r"limited time"
+        ]
+        combined = f"{title or ''} {description or ''}".lower()
+        for pat in spam_patterns:
+            if re.search(pat, combined):
+                details[f"spam:{pat}"] = -3.0
+                total += 3.0
+        # Missing keyword presence
+        if kw_list:
+            if not any(kw.lower() in combined for kw in kw_list):
+                details["missing_keywords"] = -9.0
+                total += 9.0
+        return total, details
+
+    # Choose best suggestion by provided seo_score
+    best: TitleSuggestion | None = None
+    if suggestions:
+        best = max(suggestions, key=lambda s: s.seo_score)
+
+    # Compute component scores for best suggestion
+    if best:
+        title_len = best.character_counts.title
+        desc_len = best.character_counts.description
+        title_len_score = _title_length_score(title_len)
+        desc_len_score = _description_length_score(desc_len)
+        kw_usage_score = _keyword_usage_score(best.keywords_used)
+        read_comp, read_100 = _readability_component(best.description or best.title)
+        kw_pos_score = _keyword_position_score(best.title, keywords or best.keywords_used)
+        penalties_total, penalties_map = _penalties(best.title, best.description, keywords or best.keywords_used)
+
+        # Aggregate aligned with AIService logic (max 100 then minus penalties)
+        component_total = title_len_score + desc_len_score + kw_usage_score + read_comp + kw_pos_score
+        aggregated_score = max(0.0, min(100.0, component_total - penalties_total))
+        best_score = max(best.seo_score, aggregated_score)
+
+        component_scores = {
+            "title_length": round(title_len_score, 2),
+            "description_length": round(desc_len_score, 2),
+            "keyword_usage": round(kw_usage_score, 2),
+            "readability": round(read_comp, 2),
+            "keyword_position": round(kw_pos_score, 2)
+        }
+        readability_score = round(read_100, 2)
+        keyword_position_score = round(kw_pos_score, 2)
+        penalties_dict = {k: round(v, 2) for k, v in penalties_map.items()}
+        notes = "Scores aggregated with Phase 4 model; penalties applied where applicable."
+    else:
+        # No suggestions; fall back gracefully
+        best_score = 0.0
+        component_scores = {}
+        readability_score = 50.0
+        keyword_position_score = 0.0
+        penalties_dict = {}
+        notes = "No suggestions available; analysis limited."
+
+    # Original title baseline score (length + readability only)
+    orig_title_len_score = _title_length_score(len(original_title or ""))
+    _, orig_read_100 = _readability_component(original_title or "")
+    original_score = max(0.0, min(100.0, orig_title_len_score + (orig_read_100 / 10.0)))
+
+    # Improvement
+    improvement = ((best_score - original_score) / original_score) * 100 if original_score > 0 else 0.0
+
+    # Keyword density analysis (simple proportion in best suggestion text)
+    keyword_density: Dict[str, float] = {}
+    if best and keywords:
+        text = f"{best.title} {best.description}".lower()
+        for keyword in keywords[:5]:
+            if keyword:
+                occurrences = text.count(keyword.lower())
+                # naive density: occurrence per 100 words
+                words = max(1, len(text.split()))
+                density = min(1.0, (occurrences / words) * 100.0)
+                keyword_density[keyword] = round(density, 4)
+
     return SEOAnalysis(
-        original_score=original_score,
-        best_suggestion_score=best_score,
-        improvement_percentage=improvement,
+        original_score=round(original_score, 2),
+        best_suggestion_score=round(best_score, 2),
+        improvement_percentage=round(improvement, 4),
         keyword_density_analysis=keyword_density,
-        readability_score=78.5  # Mock readability score
+        readability_score=readability_score,
+        component_scores=component_scores if component_scores else None,
+        keyword_position_score=keyword_position_score if keyword_position_score else None,
+        penalties=penalties_dict if penalties_dict else None,
+        notes=notes
     )
 
 
